@@ -222,9 +222,14 @@ func (s *indexHandler) pause() {
 // sendIndexTo sends file infos with a sequence number higher than prevSequence and
 // returns the highest sent sequence number.
 func (s *indexHandler) sendIndexTo(ctx context.Context, fset *db.FileSet) error {
+	// Keep track of the previous sequence we sent. This is separate from
+	// s.prevSequence because the latter will skip over holes in the
+	// sequence numberings, while sentPrevSequence should always be
+	// precisely the highest previousely sent sequence.
+	sentPrevSequence := s.prevSequence
+
 	initial := s.prevSequence == 0
 	batch := db.NewFileInfoBatch(nil)
-	flushPrevSequence := s.prevSequence // keep track of the previous sequence we sent
 	batch.SetFlushFunc(func(fs []protocol.FileInfo) error {
 		var lastSequence int64
 		if len(fs) > 0 {
@@ -239,11 +244,11 @@ func (s *indexHandler) sendIndexTo(ctx context.Context, fset *db.FileSet) error 
 				LastSequence: lastSequence,
 			})
 		}
-		defer func() { flushPrevSequence = lastSequence }()
+		defer func() { sentPrevSequence = lastSequence }()
 		return s.conn.IndexUpdate(ctx, &protocol.IndexUpdate{
 			Folder:       s.folder,
 			Files:        fs,
-			PrevSequence: flushPrevSequence,
+			PrevSequence: sentPrevSequence,
 			LastSequence: lastSequence,
 		})
 	})
@@ -348,19 +353,23 @@ func (s *indexHandler) receive(fs []protocol.FileInfo, update bool, op string, p
 
 	// Verify that the previous sequence number matches what we expected
 	if prevSequence > 0 && prevSequence != fset.Sequence(deviceID) {
-		l.Infof("Bug: device %v folder %s sent index update with sequence %d while we expected %d", deviceID.Short(), s.folder, fset.Sequence(deviceID), s.prevSequence)
+		l.Warnf("Bug: device %v folder %s sent index update with sequence %d while we expected %d", deviceID.Short(), s.folder, fset.Sequence(deviceID), s.prevSequence)
 		s.evLogger.Log(events.Failure, "index update with unexpected sequence")
 	}
 
 	for i := range fs {
 		// Verify index in relation to the claimed sequence boundaries
 		if fs[i].Sequence < prevSequence {
-			l.Infof("Bug: device %v folder %s sent file with sequence %d outside of claimed range %d-%d", deviceID.Short(), s.folder, fs[i].Sequence, prevSequence, lastSequence)
+			l.Warnf("Bug: device %v folder %s sent file with sequence %d outside of claimed range %d-%d", deviceID.Short(), s.folder, fs[i].Sequence, prevSequence, lastSequence)
 			s.evLogger.Log(events.Failure, "file with sequence before prevSequence")
 		}
 		if lastSequence > 0 && fs[i].Sequence > lastSequence {
-			l.Infof("Bug: device %v folder %s sent file with sequence %d outside of claimed range %d-%d", deviceID.Short(), s.folder, fs[i].Sequence, prevSequence, lastSequence)
+			l.Warnf("Bug: device %v folder %s sent file with sequence %d outside of claimed range %d-%d", deviceID.Short(), s.folder, fs[i].Sequence, prevSequence, lastSequence)
 			s.evLogger.Log(events.Failure, "file with sequence after lastSequence")
+		}
+		if i > 0 && fs[i].Sequence <= fs[i-1].Sequence {
+			l.Warnf("Bug: device %v folder %s sent non-increasing sequence %d after %d", deviceID.Short(), s.folder, fs[i].Sequence, fs[i-1].Sequence)
+			s.evLogger.Log(events.Failure, "non-increasing sequence")
 		}
 
 		// The local attributes should never be transmitted over the wire.
@@ -368,6 +377,13 @@ func (s *indexHandler) receive(fs []protocol.FileInfo, update bool, op string, p
 		fs[i].LocalFlags = 0
 		fs[i].VersionHash = nil
 	}
+
+	// Verify the claimed last sequence number
+	if lastSequence > 0 && len(fs) > 0 && lastSequence != fs[len(fs)-1].Sequence {
+		l.Warnf("Bug: device %v folder %s sent index update with last sequence %d after claiming %d", deviceID.Short(), s.folder, fs[len(fs)-1].Sequence, lastSequence)
+		s.evLogger.Log(events.Failure, "index update with unexpected last sequence")
+	}
+
 	fset.Update(deviceID, fs)
 
 	seq := fset.Sequence(deviceID)
