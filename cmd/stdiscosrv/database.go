@@ -41,7 +41,6 @@ type database interface {
 
 type levelDBStore struct {
 	db         *leveldb.DB
-	inbox      chan func()
 	clock      clock
 	marshalBuf []byte
 }
@@ -53,7 +52,6 @@ func newLevelDBStore(dir string) (*levelDBStore, error) {
 	}
 	return &levelDBStore{
 		db:    db,
-		inbox: make(chan func(), 16),
 		clock: defaultClock{},
 	}, nil
 }
@@ -65,7 +63,6 @@ func newMemoryLevelDBStore() (*levelDBStore, error) {
 	}
 	return &levelDBStore{
 		db:    db,
-		inbox: make(chan func(), 16),
 		clock: defaultClock{},
 	}, nil
 }
@@ -76,18 +73,13 @@ func (s *levelDBStore) put(key string, rec DatabaseRecord) error {
 		databaseOperationSeconds.WithLabelValues(dbOpPut).Observe(time.Since(t0).Seconds())
 	}()
 
-	rc := make(chan error)
-
-	s.inbox <- func() {
-		size := rec.Size()
-		if len(s.marshalBuf) < size {
-			s.marshalBuf = make([]byte, size)
-		}
-		n, _ := rec.MarshalTo(s.marshalBuf)
-		rc <- s.db.Put([]byte(key), s.marshalBuf[:n], nil)
+	size := rec.Size()
+	if len(s.marshalBuf) < size {
+		s.marshalBuf = make([]byte, size)
 	}
+	n, _ := rec.MarshalTo(s.marshalBuf)
+	err := s.db.Put([]byte(key), s.marshalBuf[:n], nil)
 
-	err := <-rc
 	if err != nil {
 		databaseOperations.WithLabelValues(dbOpPut, dbResError).Inc()
 	} else {
@@ -103,35 +95,27 @@ func (s *levelDBStore) merge(key string, addrs []DatabaseAddress, seen int64) er
 		databaseOperationSeconds.WithLabelValues(dbOpMerge).Observe(time.Since(t0).Seconds())
 	}()
 
-	rc := make(chan error)
 	newRec := DatabaseRecord{
 		Addresses: addrs,
 		Seen:      seen,
 	}
 
-	s.inbox <- func() {
-		// grab the existing record
-		oldRec, err := s.get(key)
-		if err != nil {
-			// "not found" is not an error from get, so this is serious
-			// stuff only
-			rc <- err
-			return
-		}
-		newRec = merge(newRec, oldRec)
-
-		// We replicate s.put() functionality here ourselves instead of
-		// calling it because we want to serialize our get above together
-		// with the put in the same function.
-		size := newRec.Size()
-		if len(s.marshalBuf) < size {
-			s.marshalBuf = make([]byte, size)
-		}
-		n, _ := newRec.MarshalTo(s.marshalBuf)
-		rc <- s.db.Put([]byte(key), s.marshalBuf[:n], nil)
+	// grab the existing record
+	oldRec, err := s.get(key)
+	if err != nil {
+		// "not found" is not an error from get, so this is serious
+		// stuff only
+		return err
 	}
+	newRec = merge(newRec, oldRec)
 
-	err := <-rc
+	size := newRec.Size()
+	if len(s.marshalBuf) < size {
+		s.marshalBuf = make([]byte, size)
+	}
+	n, _ := newRec.MarshalTo(s.marshalBuf)
+	err = s.db.Put([]byte(key), s.marshalBuf[:n], nil)
+
 	if err != nil {
 		databaseOperations.WithLabelValues(dbOpMerge, dbResError).Inc()
 	} else {
@@ -184,10 +168,6 @@ func (s *levelDBStore) Serve(ctx context.Context) error {
 loop:
 	for {
 		select {
-		case fn := <-s.inbox:
-			// Run function in serialized order.
-			fn()
-
 		case <-t.C:
 			// Trigger the statistics routine to do its thing in the
 			// background.
