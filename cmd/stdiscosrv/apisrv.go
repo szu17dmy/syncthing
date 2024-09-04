@@ -69,16 +69,14 @@ func newAPISrv(addr string, cert tls.Certificate, db database, repl replicator, 
 		seenTracker: &retryAfterTracker{
 			name:         "seenTracker",
 			bucketStarts: time.Now(),
-			bucketSize:   time.Minute,
-			desiredRate:  250 * 60,
+			desiredRate:  250,
 			currentDelay: notFoundRetryUnknownMinSeconds,
 		},
 		notSeenTracker: &retryAfterTracker{
 			name:         "notSeenTracker",
 			bucketStarts: time.Now(),
-			bucketSize:   time.Minute,
-			desiredRate:  250 * 60,
-			currentDelay: notFoundRetryUnknownMaxSeconds,
+			desiredRate:  250,
+			currentDelay: notFoundRetryUnknownMaxSeconds / 2,
 		},
 	}
 }
@@ -502,30 +500,32 @@ func reannounceAfterString() string {
 
 type retryAfterTracker struct {
 	name        string
-	desiredRate int // requests per bucketSize
+	desiredRate float64 // requests per second
 
 	mut          sync.Mutex
-	lastCount    int           // requests in the last bucket
-	curCount     int           // requests in the current bucket
-	bucketStarts time.Time     // start of the current bucket
-	bucketSize   time.Duration // size of the bucket
-	currentDelay int           // current delay in seconds
+	lastCount    int       // requests in the last bucket
+	curCount     int       // requests in the current bucket
+	bucketStarts time.Time // start of the current bucket
+	currentDelay int       // current delay in seconds
 }
 
 func (t *retryAfterTracker) retryAfterS() int {
 	now := time.Now()
 	t.mut.Lock()
-	if now.Sub(t.bucketStarts) > t.bucketSize {
+	if durS := now.Sub(t.bucketStarts).Seconds(); durS > float64(t.currentDelay) {
 		t.bucketStarts = now
 		t.lastCount = t.curCount
+		lastRate := float64(t.lastCount) / durS
 
 		switch {
-		case t.currentDelay > notFoundRetryUnknownMinSeconds && t.lastCount < t.desiredRate/3*2:
-			t.currentDelay = max(t.currentDelay/2, notFoundRetryUnknownMinSeconds)
-			log.Printf("%s: decreasing Retry-After to %d (%d/%d)", t.name, t.currentDelay, t.lastCount, t.desiredRate)
-		case t.currentDelay < notFoundRetryUnknownMaxSeconds && t.lastCount > t.desiredRate/2*3:
-			t.currentDelay = min(t.currentDelay*3/2, notFoundRetryUnknownMaxSeconds)
-			log.Printf("%s: increasing Retry-After to %d (%d/%d)", t.name, t.currentDelay, t.lastCount, t.desiredRate)
+		case t.currentDelay > notFoundRetryUnknownMinSeconds &&
+			lastRate < 0.75*t.desiredRate:
+			t.currentDelay = max(8*t.currentDelay/10, notFoundRetryUnknownMinSeconds)
+			log.Printf("%s: decreasing Retry-After to %d (%.0f/%.0f)", t.name, t.currentDelay, lastRate, t.desiredRate)
+		case t.currentDelay < notFoundRetryUnknownMaxSeconds &&
+			lastRate > 1.25*t.desiredRate:
+			t.currentDelay = min(3*t.currentDelay/2, notFoundRetryUnknownMaxSeconds)
+			log.Printf("%s: increasing Retry-After to %d (%.0f/%.0f)", t.name, t.currentDelay, lastRate, t.desiredRate)
 		}
 
 		t.curCount = 0
