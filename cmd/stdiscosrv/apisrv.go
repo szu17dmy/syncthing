@@ -66,6 +66,7 @@ func newAPISrv(addr string, cert tls.Certificate, db database, repl replicator, 
 		repl:    repl,
 		useHTTP: useHTTP,
 		nft: &retryAfterTracker{
+			bucketStarts: time.Now(),
 			bucketSize:   time.Minute,
 			desiredRate:  500 * 60,
 			currentDelay: notFoundRetryUnknownMaxSeconds,
