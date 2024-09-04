@@ -46,9 +46,6 @@ const (
 	notFoundRetrySeenSeconds    = 240
 	notFoundRetryUnknownSeconds = 3600
 
-	// How often (in requests) we serialize the missed counter to database.
-	notFoundMissesWriteInterval = 10
-
 	httpReadTimeout    = 5 * time.Second
 	httpWriteTimeout   = 5 * time.Second
 	httpMaxHeaderBytes = 1 << 10
@@ -167,10 +164,7 @@ func main() {
 	})
 
 	// Start the database.
-	db, err := newLevelDBStore(dir, flushInterval)
-	if err != nil {
-		log.Fatalln("Open database:", err)
-	}
+	db := newLevelDBStore(dir, flushInterval)
 	main.Add(db)
 
 	// Start any replication senders.

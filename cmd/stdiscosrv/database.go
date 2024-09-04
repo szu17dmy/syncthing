@@ -49,7 +49,7 @@ type inMemoryStore struct {
 	clock         clock
 }
 
-func newLevelDBStore(dir string, flushInterval time.Duration) (*inMemoryStore, error) {
+func newLevelDBStore(dir string, flushInterval time.Duration) *inMemoryStore {
 	s := &inMemoryStore{
 		dir:           dir,
 		flushInterval: flushInterval,
@@ -58,7 +58,7 @@ func newLevelDBStore(dir string, flushInterval time.Duration) (*inMemoryStore, e
 	if err := s.read(); err != nil {
 		log.Printf("Error reading database: %v", err)
 	}
-	return s, nil
+	return s
 }
 
 func (s *inMemoryStore) put(key string, rec DatabaseRecord) error {

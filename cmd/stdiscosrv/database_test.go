@@ -14,10 +14,7 @@ import (
 )
 
 func TestDatabaseGetSet(t *testing.T) {
-	db, err := newLevelDBStore(t.TempDir(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := newLevelDBStore(t.TempDir(), 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	go db.Serve(ctx)
 	defer cancel()
