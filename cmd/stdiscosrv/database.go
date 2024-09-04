@@ -200,8 +200,8 @@ func (s *inMemoryStore) calculateStatistics() {
 func (s *inMemoryStore) write() (err error) {
 	t0 := time.Now()
 	defer func() {
-		databaseWriteSeconds.Add(time.Since(t0).Seconds())
 		if err == nil {
+			databaseWriteSeconds.Set(time.Since(t0).Seconds())
 			databaseLastWritten.Set(float64(t0.Unix()))
 		}
 	}()

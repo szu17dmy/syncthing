@@ -96,11 +96,11 @@ var (
 			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 		}, []string{"operation"})
 
-	databaseWriteSeconds = prometheus.NewCounter(
-		prometheus.CounterOpts{
+	databaseWriteSeconds = prometheus.NewGauge(
+		prometheus.GaugeOpts{
 			Namespace: "syncthing",
 			Subsystem: "discovery",
-			Name:      "database_write_seconds_total",
+			Name:      "database_write_seconds",
 			Help:      "Time spent writing the database.",
 		})
 	databaseLastWritten = prometheus.NewGauge(
