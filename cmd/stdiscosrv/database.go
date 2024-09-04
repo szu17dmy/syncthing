@@ -215,6 +215,7 @@ func (s *inMemoryStore) write() (err error) {
 
 	var buf []byte
 	var rangeErr error
+	now := s.clock.Now().UnixNano()
 	cutoff1w := s.clock.Now().Add(-7 * 24 * time.Hour).UnixNano()
 	s.m.Range(func(keyI, valueI any) bool {
 		key := keyI.(string)
@@ -225,7 +226,7 @@ func (s *inMemoryStore) write() (err error) {
 		}
 		rec := ReplicationRecord{
 			Key:       key,
-			Addresses: value.Addresses,
+			Addresses: expire(value.Addresses, now),
 			Seen:      value.Seen,
 		}
 		s := rec.Size()
