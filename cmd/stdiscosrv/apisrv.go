@@ -45,7 +45,7 @@ type apiSrv struct {
 	listener net.Listener
 	repl     replicator // optional
 	useHTTP  bool
-	nft      *notfoundRetryAfterTracker
+	nft      *retryAfterTracker
 }
 
 type requestID int64
@@ -65,7 +65,7 @@ func newAPISrv(addr string, cert tls.Certificate, db database, repl replicator, 
 		db:      db,
 		repl:    repl,
 		useHTTP: useHTTP,
-		nft: &notfoundRetryAfterTracker{
+		nft: &retryAfterTracker{
 			bucketSize:   time.Minute,
 			desiredRate:  500 * 60,
 			currentDelay: notFoundRetryUnknownMaxSeconds,
@@ -488,7 +488,7 @@ func reannounceAfterString() string {
 	return strconv.Itoa(reannounceAfterSeconds + rand.Intn(reannounzeFuzzSeconds))
 }
 
-type notfoundRetryAfterTracker struct {
+type retryAfterTracker struct {
 	mut          sync.Mutex
 	lastCount    int           // requests in the last bucket
 	curCount     int           // requests in the current bucket
@@ -498,7 +498,7 @@ type notfoundRetryAfterTracker struct {
 	currentDelay int           // current delay in seconds
 }
 
-func (t *notfoundRetryAfterTracker) retryAfterS() int {
+func (t *retryAfterTracker) retryAfterS() int {
 	now := time.Now()
 	t.mut.Lock()
 	if now.Sub(t.bucketStarts) > t.bucketSize {
@@ -508,10 +508,10 @@ func (t *notfoundRetryAfterTracker) retryAfterS() int {
 		switch {
 		case t.lastCount < t.desiredRate/3*2:
 			t.currentDelay = max(t.currentDelay/2, notFoundRetryUnknownMinSeconds)
-			log.Println("notfoundRetryAfterTracker: decreasing delay to ", t.currentDelay)
+			log.Printf("retryAfterTracker: decreasing delay to %d (%d/%d)", t.currentDelay, t.lastCount, t.desiredRate)
 		case t.lastCount > t.desiredRate/2*3:
 			t.currentDelay = min(t.currentDelay*3/2, notFoundRetryUnknownMaxSeconds)
-			log.Println("notfoundRetryAfterTracker: increasing delay to ", t.currentDelay)
+			log.Printf("retryAfterTracker: increasing delay to %d (%d/%d)", t.currentDelay, t.lastCount, t.desiredRate)
 		}
 
 		t.curCount = 0
