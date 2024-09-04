@@ -31,9 +31,6 @@ func TestDatabaseGetSet(t *testing.T) {
 	if len(rec.Addresses) != 0 {
 		t.Error("addresses should be empty")
 	}
-	if rec.Misses != 0 {
-		t.Error("missing should be zero")
-	}
 
 	// Set up a clock
 
@@ -114,28 +111,6 @@ func TestDatabaseGetSet(t *testing.T) {
 		t.Error("incorrect address")
 	}
 
-	// Put a record with misses
-
-	rec = DatabaseRecord{Misses: 42, Missed: tc.Now().UnixNano()}
-	if err := db.put("efgh", rec); err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify it
-
-	rec, err = db.get("efgh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rec.Addresses) != 0 {
-		t.Log(rec.Addresses)
-		t.Fatal("should have no addresses")
-	}
-	if rec.Misses != 42 {
-		t.Log(rec.Misses)
-		t.Error("incorrect misses")
-	}
-
 	// Set an address
 
 	addrs = []DatabaseAddress{
@@ -154,10 +129,6 @@ func TestDatabaseGetSet(t *testing.T) {
 	if len(rec.Addresses) != 1 {
 		t.Log(rec.Addresses)
 		t.Fatal("should have one address")
-	}
-	if rec.Misses != 0 {
-		t.Log(rec.Misses)
-		t.Error("should have no misses")
 	}
 }
 

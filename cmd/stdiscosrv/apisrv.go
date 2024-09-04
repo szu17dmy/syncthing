@@ -25,7 +25,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/syncthing/syncthing/lib/protocol"
@@ -39,16 +38,12 @@ type announcement struct {
 }
 
 type apiSrv struct {
-	addr           string
-	cert           tls.Certificate
-	db             database
-	listener       net.Listener
-	repl           replicator // optional
-	useHTTP        bool
-	missesIncrease int
-
-	mapsMut sync.Mutex
-	misses  map[string]int32
+	addr     string
+	cert     tls.Certificate
+	db       database
+	listener net.Listener
+	repl     replicator // optional
+	useHTTP  bool
 }
 
 type requestID int64
@@ -61,15 +56,13 @@ type contextKey int
 
 const idKey contextKey = iota
 
-func newAPISrv(addr string, cert tls.Certificate, db database, repl replicator, useHTTP bool, missesIncrease int) *apiSrv {
+func newAPISrv(addr string, cert tls.Certificate, db database, repl replicator, useHTTP bool) *apiSrv {
 	return &apiSrv{
-		addr:           addr,
-		cert:           cert,
-		db:             db,
-		repl:           repl,
-		useHTTP:        useHTTP,
-		misses:         make(map[string]int32),
-		missesIncrease: missesIncrease,
+		addr:    addr,
+		cert:    cert,
+		db:      db,
+		repl:    repl,
+		useHTTP: useHTTP,
 	}
 }
 
@@ -199,26 +192,11 @@ func (s *apiSrv) handleGET(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if len(rec.Addresses) == 0 {
+		afterS := notFoundRetrySeenSeconds
+		if rec.Seen == 0 {
+			afterS = notFoundRetryUnknownSeconds
+		}
 		lookupRequestsTotal.WithLabelValues("not_found").Inc()
-
-		s.mapsMut.Lock()
-		misses := s.misses[key]
-		if misses < rec.Misses {
-			misses = rec.Misses
-		}
-		misses += int32(s.missesIncrease)
-		s.misses[key] = misses
-		s.mapsMut.Unlock()
-
-		if misses >= notFoundMissesWriteInterval {
-			rec.Misses = misses
-			rec.Missed = time.Now().UnixNano()
-			rec.Addresses = nil
-			// rec.Seen retained from get
-			s.db.put(key, rec)
-		}
-
-		afterS := notFoundRetryAfterSeconds(int(misses))
 		retryAfterHistogram.Observe(float64(afterS))
 		w.Header().Set("Retry-After", strconv.Itoa(afterS))
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -497,15 +475,6 @@ func addressStrs(dbAddrs []DatabaseAddress) []string {
 
 func errorRetryAfterString() string {
 	return strconv.Itoa(errorRetryAfterSeconds + rand.Intn(errorRetryFuzzSeconds))
-}
-
-func notFoundRetryAfterSeconds(misses int) int {
-	retryAfterS := notFoundRetryMinSeconds + notFoundRetryIncSeconds*misses
-	if retryAfterS > notFoundRetryMaxSeconds {
-		retryAfterS = notFoundRetryMaxSeconds
-	}
-	retryAfterS += rand.Intn(notFoundRetryFuzzSeconds)
-	return retryAfterS
 }
 
 func reannounceAfterString() string {

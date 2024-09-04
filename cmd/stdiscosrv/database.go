@@ -140,8 +140,7 @@ func (s *inMemoryStore) calculateStatistics() {
 	nowNanos := t0.UnixNano()
 	cutoff24h := t0.Add(-24 * time.Hour).UnixNano()
 	cutoff1w := t0.Add(-7 * 24 * time.Hour).UnixNano()
-	cutoff2Mon := t0.Add(-60 * 24 * time.Hour).UnixNano()
-	current, currentIPv4, currentIPv6, last24h, last1w, inactive, errors := 0, 0, 0, 0, 0, 0, 0
+	current, currentIPv4, currentIPv6, last24h, last1w, errors := 0, 0, 0, 0, 0, 0
 
 	s.m.Range(func(keyI, valueI any) bool {
 		rec := valueI.(DatabaseRecord)
@@ -182,15 +181,9 @@ func (s *inMemoryStore) calculateStatistics() {
 			last24h++
 		case rec.Seen > cutoff1w:
 			last1w++
-		case rec.Seen > cutoff2Mon:
-			inactive++
-		case rec.Missed < cutoff2Mon:
-			// It hasn't been seen lately and we haven't recorded
-			// someone asking for this device in a long time either;
-			// delete the record.
-			s.m.Delete(keyI)
 		default:
-			inactive++
+			// drop the record if it's older than a week
+			s.m.Delete(keyI)
 		}
 		return true
 	})
@@ -200,7 +193,6 @@ func (s *inMemoryStore) calculateStatistics() {
 	databaseKeys.WithLabelValues("currentIPv6").Set(float64(currentIPv6))
 	databaseKeys.WithLabelValues("last24h").Set(float64(last24h))
 	databaseKeys.WithLabelValues("last1w").Set(float64(last1w))
-	databaseKeys.WithLabelValues("inactive").Set(float64(inactive))
 	databaseKeys.WithLabelValues("error").Set(float64(errors))
 	databaseStatisticsSeconds.Set(time.Since(t0).Seconds())
 }

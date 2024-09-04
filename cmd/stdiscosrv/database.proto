@@ -18,11 +18,7 @@ option (gogoproto.goproto_sizecache_all) = false;
 message DatabaseRecord {
     repeated DatabaseAddress addresses = 1 [(gogoproto.nullable) = false];
     int64                    seen      = 3; // Unix nanos, last device announce
-    int64                    missed    = 4; // Unix nanos, last* failed lookup
-    int32                    misses    = 2; // Number of lookups* without hits
 }
-
-// *) Not every lookup results in a write, so may not be completely accurate
 
 message ReplicationRecord {
     string                   key       = 1;

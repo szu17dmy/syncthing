@@ -39,14 +39,12 @@ const (
 	errorRetryAfterSeconds = 1500
 	errorRetryFuzzSeconds  = 300
 
-	// Retry for not found is minSeconds + failures * incSeconds +
-	// random(fuzz), where failures is the number of consecutive lookups
-	// with no answer, up to maxSeconds. The fuzz is applied after capping
-	// to maxSeconds.
-	notFoundRetryMinSeconds  = 60
-	notFoundRetryMaxSeconds  = 3540
-	notFoundRetryIncSeconds  = 10
-	notFoundRetryFuzzSeconds = 60
+	// Retry for not found is notFoundRetrySeenSeconds for records we have
+	// seen an announcement for (but it's not active right now) and
+	// notFoundRetryUnknownSeconds for records we have never seen (or not
+	// seen within the last week).
+	notFoundRetrySeenSeconds    = 240
+	notFoundRetryUnknownSeconds = 3600
 
 	// How often (in requests) we serialize the missed counter to database.
 	notFoundMissesWriteInterval = 10
@@ -74,7 +72,6 @@ func main() {
 	var useHTTP bool
 	var amqpAddress string
 	var flushInterval time.Duration
-	missesIncrease := 1
 
 	log.SetOutput(os.Stdout)
 	log.SetFlags(0)
@@ -91,7 +88,6 @@ func main() {
 	flag.StringVar(&replCertFile, "replication-cert", "", "Certificate file for replication")
 	flag.StringVar(&replKeyFile, "replication-key", "", "Key file for replication")
 	flag.StringVar(&amqpAddress, "amqp-address", "", "Address to AMQP broker")
-	flag.IntVar(&missesIncrease, "misses-increase", 1, "How many times to increase the misses counter on each miss")
 	flag.DurationVar(&flushInterval, "flush-interval", 5*time.Minute, "Interval between database flushes")
 	showVersion := flag.Bool("version", false, "Show version")
 	flag.Parse()
@@ -208,7 +204,7 @@ func main() {
 	}()
 
 	// Start the main API server.
-	qs := newAPISrv(listen, cert, db, repl, useHTTP, missesIncrease)
+	qs := newAPISrv(listen, cert, db, repl, useHTTP)
 	main.Add(qs)
 
 	// If we have a metrics port configured, start a metrics handler.
