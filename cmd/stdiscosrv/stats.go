@@ -100,7 +100,7 @@ var (
 		prometheus.CounterOpts{
 			Namespace: "syncthing",
 			Subsystem: "discovery",
-			Name:      "database_write_seconds",
+			Name:      "database_write_seconds_total",
 			Help:      "Time spent writing the database.",
 		})
 	databaseLastWritten = prometheus.NewGauge(
@@ -138,5 +138,6 @@ func init() {
 		replicationSendsTotal, replicationRecvsTotal,
 		databaseKeys, databaseStatisticsSeconds,
 		databaseOperations, databaseOperationSeconds,
+		databaseWriteSeconds, databaseLastWritten,
 		retryAfterHistogram)
 }
