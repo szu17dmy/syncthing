@@ -39,13 +39,14 @@ type announcement struct {
 }
 
 type apiSrv struct {
-	addr     string
-	cert     tls.Certificate
-	db       database
-	listener net.Listener
-	repl     replicator // optional
-	useHTTP  bool
-	nft      *retryAfterTracker
+	addr           string
+	cert           tls.Certificate
+	db             database
+	listener       net.Listener
+	repl           replicator // optional
+	useHTTP        bool
+	seenTracker    *retryAfterTracker
+	notSeenTracker *retryAfterTracker
 }
 
 type requestID int64
@@ -65,10 +66,18 @@ func newAPISrv(addr string, cert tls.Certificate, db database, repl replicator, 
 		db:      db,
 		repl:    repl,
 		useHTTP: useHTTP,
-		nft: &retryAfterTracker{
+		seenTracker: &retryAfterTracker{
+			name:         "seenTracker",
 			bucketStarts: time.Now(),
 			bucketSize:   time.Minute,
-			desiredRate:  500 * 60,
+			desiredRate:  250 * 60,
+			currentDelay: notFoundRetryUnknownMinSeconds,
+		},
+		notSeenTracker: &retryAfterTracker{
+			name:         "notSeenTracker",
+			bucketStarts: time.Now(),
+			bucketSize:   time.Minute,
+			desiredRate:  250 * 60,
 			currentDelay: notFoundRetryUnknownMaxSeconds,
 		},
 	}
@@ -200,9 +209,11 @@ func (s *apiSrv) handleGET(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if len(rec.Addresses) == 0 {
-		afterS := notFoundRetrySeenSeconds
+		var afterS int
 		if rec.Seen == 0 {
-			afterS = s.nft.retryAfterS()
+			afterS = s.notSeenTracker.retryAfterS()
+		} else {
+			afterS = s.seenTracker.retryAfterS()
 		}
 		lookupRequestsTotal.WithLabelValues("not_found").Inc()
 		retryAfterHistogram.Observe(float64(afterS))
@@ -490,12 +501,14 @@ func reannounceAfterString() string {
 }
 
 type retryAfterTracker struct {
+	name        string
+	desiredRate int // requests per bucketSize
+
 	mut          sync.Mutex
 	lastCount    int           // requests in the last bucket
 	curCount     int           // requests in the current bucket
 	bucketStarts time.Time     // start of the current bucket
 	bucketSize   time.Duration // size of the bucket
-	desiredRate  int           // requests per bucketSize
 	currentDelay int           // current delay in seconds
 }
 
@@ -509,10 +522,10 @@ func (t *retryAfterTracker) retryAfterS() int {
 		switch {
 		case t.currentDelay > notFoundRetryUnknownMinSeconds && t.lastCount < t.desiredRate/3*2:
 			t.currentDelay = max(t.currentDelay/2, notFoundRetryUnknownMinSeconds)
-			log.Printf("retryAfterTracker: decreasing Retry-After to %d (%d/%d)", t.currentDelay, t.lastCount, t.desiredRate)
+			log.Printf("%s: decreasing Retry-After to %d (%d/%d)", name, t.currentDelay, t.lastCount, t.desiredRate)
 		case t.currentDelay < notFoundRetryUnknownMaxSeconds && t.lastCount > t.desiredRate/2*3:
 			t.currentDelay = min(t.currentDelay*3/2, notFoundRetryUnknownMaxSeconds)
-			log.Printf("retryAfterTracker: increasing Retry-After to %d (%d/%d)", t.currentDelay, t.lastCount, t.desiredRate)
+			log.Printf("%s: increasing Retry-After to %d (%d/%d)", name, t.currentDelay, t.lastCount, t.desiredRate)
 		}
 
 		t.curCount = 0
