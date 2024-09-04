@@ -73,7 +73,7 @@ func newAPISrv(addr string, cert tls.Certificate, db database, repl replicator, 
 	}
 }
 
-func (s *apiSrv) Serve(_ context.Context) error {
+func (s *apiSrv) Serve(ctx context.Context) error {
 	if s.useHTTP {
 		listener, err := net.Listen("tcp", s.addr)
 		if err != nil {
@@ -106,6 +106,11 @@ func (s *apiSrv) Serve(_ context.Context) error {
 		MaxHeaderBytes: httpMaxHeaderBytes,
 		ErrorLog:       log.New(io.Discard, "", 0),
 	}
+
+	go func() {
+		<-ctx.Done()
+		srv.Shutdown(context.Background())
+	}()
 
 	err := srv.Serve(s.listener)
 	if err != nil {

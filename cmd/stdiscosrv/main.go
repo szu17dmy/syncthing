@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
 	"time"
@@ -237,6 +238,18 @@ func main() {
 		}()
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Cancel on signal
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt)
+	go func() {
+		sig := <-signalChan
+		log.Printf("Received signal %s; shutting down", sig)
+		cancel()
+	}()
+
 	// Engage!
-	main.Serve(context.Background())
+	main.Serve(ctx)
 }

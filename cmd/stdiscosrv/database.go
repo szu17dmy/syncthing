@@ -10,17 +10,20 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
+	"io"
 	"log"
 	"net"
 	"net/url"
+	"os"
+	"path"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/syncthing/syncthing/lib/sliceutil"
-	"github.com/syndtr/goleveldb/leveldb"
-	"github.com/syndtr/goleveldb/leveldb/storage"
-	"github.com/syndtr/goleveldb/leveldb/util"
 )
 
 type clock interface {
@@ -39,245 +42,253 @@ type database interface {
 	get(key string) (DatabaseRecord, error)
 }
 
-type levelDBStore struct {
-	db         *leveldb.DB
-	clock      clock
-	marshalBuf []byte
+type inMemoryStore struct {
+	m     sync.Map
+	dir   string
+	clock clock
 }
 
-func newLevelDBStore(dir string) (*levelDBStore, error) {
-	db, err := leveldb.OpenFile(dir, levelDBOptions)
-	if err != nil {
-		return nil, err
-	}
-	return &levelDBStore{
-		db:    db,
+func newLevelDBStore(dir string) (*inMemoryStore, error) {
+	s := &inMemoryStore{
+		dir:   dir,
 		clock: defaultClock{},
-	}, nil
-}
-
-func newMemoryLevelDBStore() (*levelDBStore, error) {
-	db, err := leveldb.Open(storage.NewMemStorage(), nil)
-	if err != nil {
-		return nil, err
 	}
-	return &levelDBStore{
-		db:    db,
-		clock: defaultClock{},
-	}, nil
+	if err := s.read(); err != nil {
+		log.Printf("Error reading database: %v", err)
+	}
+	return s, nil
 }
 
-func (s *levelDBStore) put(key string, rec DatabaseRecord) error {
+func (s *inMemoryStore) put(key string, rec DatabaseRecord) error {
 	t0 := time.Now()
-	defer func() {
-		databaseOperationSeconds.WithLabelValues(dbOpPut).Observe(time.Since(t0).Seconds())
-	}()
-
-	size := rec.Size()
-	if len(s.marshalBuf) < size {
-		s.marshalBuf = make([]byte, size)
-	}
-	n, _ := rec.MarshalTo(s.marshalBuf)
-	err := s.db.Put([]byte(key), s.marshalBuf[:n], nil)
-
-	if err != nil {
-		databaseOperations.WithLabelValues(dbOpPut, dbResError).Inc()
-	} else {
-		databaseOperations.WithLabelValues(dbOpPut, dbResSuccess).Inc()
-	}
-
-	return err
+	s.m.Store(key, rec)
+	databaseOperations.WithLabelValues(dbOpPut, dbResSuccess).Inc()
+	databaseOperationSeconds.WithLabelValues(dbOpPut).Observe(time.Since(t0).Seconds())
+	return nil
 }
 
-func (s *levelDBStore) merge(key string, addrs []DatabaseAddress, seen int64) error {
+func (s *inMemoryStore) merge(key string, addrs []DatabaseAddress, seen int64) error {
 	t0 := time.Now()
-	defer func() {
-		databaseOperationSeconds.WithLabelValues(dbOpMerge).Observe(time.Since(t0).Seconds())
-	}()
 
 	newRec := DatabaseRecord{
 		Addresses: addrs,
 		Seen:      seen,
 	}
 
-	// grab the existing record
-	oldRec, err := s.get(key)
-	if err != nil {
-		// "not found" is not an error from get, so this is serious
-		// stuff only
-		return err
+	var oldRec DatabaseRecord
+	if vi, ok := s.m.Load(key); ok {
+		oldRec = vi.(DatabaseRecord)
 	}
 	newRec = merge(newRec, oldRec)
+	s.m.Store(key, newRec)
 
-	size := newRec.Size()
-	if len(s.marshalBuf) < size {
-		s.marshalBuf = make([]byte, size)
-	}
-	n, _ := newRec.MarshalTo(s.marshalBuf)
-	err = s.db.Put([]byte(key), s.marshalBuf[:n], nil)
+	databaseOperations.WithLabelValues(dbOpMerge, dbResSuccess).Inc()
+	databaseOperationSeconds.WithLabelValues(dbOpMerge).Observe(time.Since(t0).Seconds())
 
-	if err != nil {
-		databaseOperations.WithLabelValues(dbOpMerge, dbResError).Inc()
-	} else {
-		databaseOperations.WithLabelValues(dbOpMerge, dbResSuccess).Inc()
-	}
-
-	return err
+	return nil
 }
 
-func (s *levelDBStore) get(key string) (DatabaseRecord, error) {
+func (s *inMemoryStore) get(key string) (DatabaseRecord, error) {
 	t0 := time.Now()
 	defer func() {
 		databaseOperationSeconds.WithLabelValues(dbOpGet).Observe(time.Since(t0).Seconds())
 	}()
 
-	keyBs := []byte(key)
-	val, err := s.db.Get(keyBs, nil)
-	if err == leveldb.ErrNotFound {
+	vi, ok := s.m.Load(key)
+	if !ok {
 		databaseOperations.WithLabelValues(dbOpGet, dbResNotFound).Inc()
 		return DatabaseRecord{}, nil
 	}
-	if err != nil {
-		databaseOperations.WithLabelValues(dbOpGet, dbResError).Inc()
-		return DatabaseRecord{}, err
-	}
 
-	var rec DatabaseRecord
-
-	if err := rec.Unmarshal(val); err != nil {
-		databaseOperations.WithLabelValues(dbOpGet, dbResUnmarshalError).Inc()
-		return DatabaseRecord{}, nil
-	}
-
+	rec := vi.(DatabaseRecord)
 	rec.Addresses = expire(rec.Addresses, s.clock.Now().UnixNano())
 	databaseOperations.WithLabelValues(dbOpGet, dbResSuccess).Inc()
 	return rec, nil
 }
 
-func (s *levelDBStore) Serve(ctx context.Context) error {
+func (s *inMemoryStore) Serve(ctx context.Context) error {
 	t := time.NewTimer(0)
 	defer t.Stop()
-	defer s.db.Close()
-
-	// Start the statistics serve routine. It will exit with us when
-	// statisticsTrigger is closed.
-	statisticsTrigger := make(chan struct{})
-	statisticsDone := make(chan struct{})
-	go s.statisticsServe(statisticsTrigger, statisticsDone)
 
 loop:
 	for {
 		select {
 		case <-t.C:
-			// Trigger the statistics routine to do its thing in the
-			// background.
-			statisticsTrigger <- struct{}{}
-
-		case <-statisticsDone:
-			// The statistics routine is done with one iteratation, schedule
-			// the next.
-			t.Reset(databaseStatisticsInterval)
+			if err := s.write(); err != nil {
+				log.Println("Error writing database:", err)
+			}
+			s.calculateStatistics()
+			t.Reset(5 * time.Minute)
 
 		case <-ctx.Done():
 			// We're done.
-			close(statisticsTrigger)
 			break loop
 		}
 	}
 
-	// Also wait for statisticsServe to return
-	<-statisticsDone
-
-	return nil
+	return s.write()
 }
 
-func (s *levelDBStore) statisticsServe(trigger <-chan struct{}, done chan<- struct{}) {
-	defer close(done)
+func (s *inMemoryStore) calculateStatistics() {
+	t0 := time.Now()
+	nowNanos := t0.UnixNano()
+	cutoff24h := t0.Add(-24 * time.Hour).UnixNano()
+	cutoff1w := t0.Add(-7 * 24 * time.Hour).UnixNano()
+	cutoff2Mon := t0.Add(-60 * 24 * time.Hour).UnixNano()
+	current, currentIPv4, currentIPv6, last24h, last1w, inactive, errors := 0, 0, 0, 0, 0, 0, 0
 
-	for range trigger {
-		t0 := time.Now()
-		nowNanos := t0.UnixNano()
-		cutoff24h := t0.Add(-24 * time.Hour).UnixNano()
-		cutoff1w := t0.Add(-7 * 24 * time.Hour).UnixNano()
-		cutoff2Mon := t0.Add(-60 * 24 * time.Hour).UnixNano()
-		current, currentIPv4, currentIPv6, last24h, last1w, inactive, errors := 0, 0, 0, 0, 0, 0, 0
+	s.m.Range(func(keyI, valueI any) bool {
+		rec := valueI.(DatabaseRecord)
 
-		iter := s.db.NewIterator(&util.Range{}, nil)
-		for iter.Next() {
-			// Attempt to unmarshal the record and count the
-			// failure if there's something wrong with it.
-			var rec DatabaseRecord
-			if err := rec.Unmarshal(iter.Value()); err != nil {
-				errors++
-				continue
+		// If there are addresses that have not expired it's a current
+		// record, otherwise account it based on when it was last seen
+		// (last 24 hours or last week) or finally as inactice.
+		addrs := expire(rec.Addresses, nowNanos)
+		switch {
+		case len(addrs) > 0:
+			current++
+			seenIPv4, seenIPv6 := false, false
+			for _, addr := range addrs {
+				uri, err := url.Parse(addr.Address)
+				if err != nil {
+					continue
+				}
+				host, _, err := net.SplitHostPort(uri.Host)
+				if err != nil {
+					continue
+				}
+				if ip := net.ParseIP(host); ip != nil && ip.To4() != nil {
+					seenIPv4 = true
+				} else if ip != nil {
+					seenIPv6 = true
+				}
+				if seenIPv4 && seenIPv6 {
+					break
+				}
 			}
-
-			// If there are addresses that have not expired it's a current
-			// record, otherwise account it based on when it was last seen
-			// (last 24 hours or last week) or finally as inactice.
-			addrs := expire(rec.Addresses, nowNanos)
-			switch {
-			case len(addrs) > 0:
-				current++
-				seenIPv4, seenIPv6 := false, false
-				for _, addr := range addrs {
-					uri, err := url.Parse(addr.Address)
-					if err != nil {
-						continue
-					}
-					host, _, err := net.SplitHostPort(uri.Host)
-					if err != nil {
-						continue
-					}
-					if ip := net.ParseIP(host); ip != nil && ip.To4() != nil {
-						seenIPv4 = true
-					} else if ip != nil {
-						seenIPv6 = true
-					}
-					if seenIPv4 && seenIPv6 {
-						break
-					}
-				}
-				if seenIPv4 {
-					currentIPv4++
-				}
-				if seenIPv6 {
-					currentIPv6++
-				}
-			case rec.Seen > cutoff24h:
-				last24h++
-			case rec.Seen > cutoff1w:
-				last1w++
-			case rec.Seen > cutoff2Mon:
-				inactive++
-			case rec.Missed < cutoff2Mon:
-				// It hasn't been seen lately and we haven't recorded
-				// someone asking for this device in a long time either;
-				// delete the record.
-				if err := s.db.Delete(iter.Key(), nil); err != nil {
-					databaseOperations.WithLabelValues(dbOpDelete, dbResError).Inc()
-				} else {
-					databaseOperations.WithLabelValues(dbOpDelete, dbResSuccess).Inc()
-				}
-			default:
-				inactive++
+			if seenIPv4 {
+				currentIPv4++
 			}
+			if seenIPv6 {
+				currentIPv6++
+			}
+		case rec.Seen > cutoff24h:
+			last24h++
+		case rec.Seen > cutoff1w:
+			last1w++
+		case rec.Seen > cutoff2Mon:
+			inactive++
+		case rec.Missed < cutoff2Mon:
+			// It hasn't been seen lately and we haven't recorded
+			// someone asking for this device in a long time either;
+			// delete the record.
+			s.m.Delete(keyI)
+		default:
+			inactive++
 		}
+		return true
+	})
 
-		iter.Release()
+	databaseKeys.WithLabelValues("current").Set(float64(current))
+	databaseKeys.WithLabelValues("currentIPv4").Set(float64(currentIPv4))
+	databaseKeys.WithLabelValues("currentIPv6").Set(float64(currentIPv6))
+	databaseKeys.WithLabelValues("last24h").Set(float64(last24h))
+	databaseKeys.WithLabelValues("last1w").Set(float64(last1w))
+	databaseKeys.WithLabelValues("inactive").Set(float64(inactive))
+	databaseKeys.WithLabelValues("error").Set(float64(errors))
+	databaseStatisticsSeconds.Set(time.Since(t0).Seconds())
+}
 
-		databaseKeys.WithLabelValues("current").Set(float64(current))
-		databaseKeys.WithLabelValues("currentIPv4").Set(float64(currentIPv4))
-		databaseKeys.WithLabelValues("currentIPv6").Set(float64(currentIPv6))
-		databaseKeys.WithLabelValues("last24h").Set(float64(last24h))
-		databaseKeys.WithLabelValues("last1w").Set(float64(last1w))
-		databaseKeys.WithLabelValues("inactive").Set(float64(inactive))
-		databaseKeys.WithLabelValues("error").Set(float64(errors))
-		databaseStatisticsSeconds.Set(time.Since(t0).Seconds())
+func (s *inMemoryStore) write() (err error) {
+	t0 := time.Now()
+	defer func() {
+		databaseWriteSeconds.Add(time.Since(t0).Seconds())
+		if err == nil {
+			databaseLastWritten.Set(float64(t0.Unix()))
+		}
+	}()
 
-		// Signal that we are done and can be scheduled again.
-		done <- struct{}{}
+	dbf := path.Join(s.dir, "records.db")
+	fd, err := os.Create(dbf + ".tmp")
+	if err != nil {
+		return err
 	}
+	bw := bufio.NewWriter(fd)
+
+	var buf []byte
+	var rangeErr error
+	s.m.Range(func(keyI, valueI any) bool {
+		key := keyI.(string)
+		value := valueI.(DatabaseRecord)
+		rec := ReplicationRecord{
+			Key:       key,
+			Addresses: value.Addresses,
+			Seen:      value.Seen,
+		}
+		s := rec.Size()
+		if s+4 > len(buf) {
+			buf = make([]byte, s+4)
+		}
+		n, err := rec.MarshalTo(buf[4:])
+		if err != nil {
+			rangeErr = err
+			return false
+		}
+		binary.BigEndian.PutUint32(buf, uint32(n))
+		if _, err := bw.Write(buf[:n+4]); err != nil {
+			rangeErr = err
+			return false
+		}
+		return true
+	})
+	if rangeErr != nil {
+		_ = fd.Close()
+		return rangeErr
+	}
+
+	if err := bw.Flush(); err != nil {
+		_ = fd.Close
+		return err
+	}
+	if err := fd.Close(); err != nil {
+		return err
+	}
+	return os.Rename(dbf+".tmp", dbf)
+}
+
+func (s *inMemoryStore) read() error {
+	fd, err := os.Open(path.Join(s.dir, "records.db"))
+	if err != nil {
+		return err
+	}
+	defer fd.Close()
+
+	br := bufio.NewReader(fd)
+	var buf []byte
+	for {
+		var n uint32
+		if err := binary.Read(br, binary.BigEndian, &n); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+		if int(n) > len(buf) {
+			buf = make([]byte, n)
+		}
+		if _, err := io.ReadFull(br, buf[:n]); err != nil {
+			return err
+		}
+		rec := ReplicationRecord{}
+		if err := rec.Unmarshal(buf[:n]); err != nil {
+			return err
+		}
+		s.m.Store(rec.Key, DatabaseRecord{
+			Addresses: rec.Addresses,
+			Seen:      rec.Seen,
+		})
+	}
+	return nil
 }
 
 // merge returns the merged result of the two database records a and b. The
