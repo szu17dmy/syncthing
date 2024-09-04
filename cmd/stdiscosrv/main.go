@@ -43,8 +43,9 @@ const (
 	// seen an announcement for (but it's not active right now) and
 	// notFoundRetryUnknownSeconds for records we have never seen (or not
 	// seen within the last week).
-	notFoundRetrySeenSeconds    = 240
-	notFoundRetryUnknownSeconds = 3600
+	notFoundRetrySeenSeconds       = 120
+	notFoundRetryUnknownMinSeconds = notFoundRetrySeenSeconds
+	notFoundRetryUnknownMaxSeconds = 3600
 
 	httpReadTimeout    = 5 * time.Second
 	httpWriteTimeout   = 5 * time.Second

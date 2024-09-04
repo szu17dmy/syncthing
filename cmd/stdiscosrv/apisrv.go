@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/syncthing/syncthing/lib/protocol"
@@ -44,6 +45,7 @@ type apiSrv struct {
 	listener net.Listener
 	repl     replicator // optional
 	useHTTP  bool
+	nft      *notfoundRetryAfterTracker
 }
 
 type requestID int64
@@ -63,6 +65,11 @@ func newAPISrv(addr string, cert tls.Certificate, db database, repl replicator, 
 		db:      db,
 		repl:    repl,
 		useHTTP: useHTTP,
+		nft: &notfoundRetryAfterTracker{
+			bucketSize:   time.Minute,
+			desiredRate:  500 * 60,
+			currentDelay: notFoundRetryUnknownMaxSeconds,
+		},
 	}
 }
 
@@ -194,7 +201,7 @@ func (s *apiSrv) handleGET(w http.ResponseWriter, req *http.Request) {
 	if len(rec.Addresses) == 0 {
 		afterS := notFoundRetrySeenSeconds
 		if rec.Seen == 0 {
-			afterS = notFoundRetryUnknownSeconds
+			afterS = s.nft.retryAfterS()
 		}
 		lookupRequestsTotal.WithLabelValues("not_found").Inc()
 		retryAfterHistogram.Observe(float64(afterS))
@@ -479,4 +486,37 @@ func errorRetryAfterString() string {
 
 func reannounceAfterString() string {
 	return strconv.Itoa(reannounceAfterSeconds + rand.Intn(reannounzeFuzzSeconds))
+}
+
+type notfoundRetryAfterTracker struct {
+	mut          sync.Mutex
+	lastCount    int           // requests in the last bucket
+	curCount     int           // requests in the current bucket
+	bucketStarts time.Time     // start of the current bucket
+	bucketSize   time.Duration // size of the bucket
+	desiredRate  int           // requests per bucketSize
+	currentDelay int           // current delay in seconds
+}
+
+func (t *notfoundRetryAfterTracker) retryAfterS() int {
+	now := time.Now()
+	t.mut.Lock()
+	if now.Sub(t.bucketStarts) > t.bucketSize {
+		t.bucketStarts = now
+		t.lastCount = t.curCount
+
+		switch {
+		case t.lastCount < t.desiredRate/3*2:
+			t.currentDelay = max(t.currentDelay/2, notFoundRetryUnknownMinSeconds)
+			log.Println("notfoundRetryAfterTracker: decreasing delay to ", t.currentDelay)
+		case t.lastCount > t.desiredRate/2*3:
+			t.currentDelay = min(t.currentDelay*3/2, notFoundRetryUnknownMaxSeconds)
+			log.Println("notfoundRetryAfterTracker: increasing delay to ", t.currentDelay)
+		}
+
+		t.curCount = 0
+	}
+	t.curCount++
+	t.mut.Unlock()
+	return t.currentDelay
 }
