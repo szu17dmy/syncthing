@@ -111,13 +111,13 @@ var (
 			Help:      "Timestamp of the last successful database write.",
 		})
 
-	retryAfterHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "syncthing",
-		Subsystem: "discovery",
-		Name:      "retry_after_seconds",
-		Help:      "Retry-After header value in seconds.",
-		Buckets:   prometheus.ExponentialBuckets(60, 2, 7), // 60, 120, 240, 480, 960, 1920, 3840
-	})
+	retryAfterLevel = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "syncthing",
+			Subsystem: "discovery",
+			Name:      "retry_after_seconds",
+			Help:      "Retry-After header value in seconds.",
+		}, []string{"name"})
 )
 
 const (
@@ -139,5 +139,5 @@ func init() {
 		databaseKeys, databaseStatisticsSeconds,
 		databaseOperations, databaseOperationSeconds,
 		databaseWriteSeconds, databaseLastWritten,
-		retryAfterHistogram)
+		retryAfterLevel)
 }

@@ -214,7 +214,6 @@ func (s *apiSrv) handleGET(w http.ResponseWriter, req *http.Request) {
 			afterS = s.seenTracker.retryAfterS()
 		}
 		lookupRequestsTotal.WithLabelValues("not_found").Inc()
-		retryAfterHistogram.Observe(float64(afterS))
 		w.Header().Set("Retry-After", strconv.Itoa(afterS))
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
@@ -528,6 +527,7 @@ func (t *retryAfterTracker) retryAfterS() int {
 			log.Printf("%s: increasing Retry-After to %d (%.0f/%.0f)", t.name, t.currentDelay, lastRate, t.desiredRate)
 		}
 
+		retryAfterLevel.WithLabelValues(t.name).Set(float64(t.currentDelay))
 		t.curCount = 0
 	}
 	t.curCount++
