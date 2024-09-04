@@ -25,7 +25,6 @@ import (
 	"github.com/syncthing/syncthing/lib/protocol"
 	"github.com/syncthing/syncthing/lib/rand"
 	"github.com/syncthing/syncthing/lib/tlsutil"
-	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/thejerf/suture/v4"
 )
 
@@ -60,14 +59,6 @@ const (
 	replicationOutboxSize = 10000
 )
 
-// These options make the database a little more optimized for writes, at
-// the expense of some memory usage and risk of losing writes in a (system)
-// crash.
-var levelDBOptions = &opt.Options{
-	NoSync:      true,
-	WriteBuffer: 32 << 20, // default 4<<20
-}
-
 var debug = false
 
 func main() {
@@ -81,8 +72,8 @@ func main() {
 	var replCertFile string
 	var replKeyFile string
 	var useHTTP bool
-	var largeDB bool
 	var amqpAddress string
+	var flushInterval time.Duration
 	missesIncrease := 1
 
 	log.SetOutput(os.Stdout)
@@ -99,9 +90,9 @@ func main() {
 	flag.StringVar(&replicationListen, "replication-listen", ":19200", "Replication listen address")
 	flag.StringVar(&replCertFile, "replication-cert", "", "Certificate file for replication")
 	flag.StringVar(&replKeyFile, "replication-key", "", "Key file for replication")
-	flag.BoolVar(&largeDB, "large-db", false, "Use larger database settings")
 	flag.StringVar(&amqpAddress, "amqp-address", "", "Address to AMQP broker")
 	flag.IntVar(&missesIncrease, "misses-increase", 1, "How many times to increase the misses counter on each miss")
+	flag.DurationVar(&flushInterval, "flush-interval", 5*time.Minute, "Interval between database flushes")
 	showVersion := flag.Bool("version", false, "Show version")
 	flag.Parse()
 
@@ -111,15 +102,6 @@ func main() {
 	}
 
 	buildInfo.WithLabelValues(build.Version, runtime.Version(), build.User, build.Date.UTC().Format("2006-01-02T15:04:05Z")).Set(1)
-
-	if largeDB {
-		levelDBOptions.BlockCacheCapacity = 64 << 20
-		levelDBOptions.BlockSize = 64 << 10
-		levelDBOptions.CompactionTableSize = 16 << 20
-		levelDBOptions.CompactionTableSizeMultiplier = 2.0
-		levelDBOptions.WriteBuffer = 64 << 20
-		levelDBOptions.CompactionL0Trigger = 8
-	}
 
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if os.IsNotExist(err) {
@@ -189,7 +171,7 @@ func main() {
 	})
 
 	// Start the database.
-	db, err := newLevelDBStore(dir)
+	db, err := newLevelDBStore(dir, flushInterval)
 	if err != nil {
 		log.Fatalln("Open database:", err)
 	}

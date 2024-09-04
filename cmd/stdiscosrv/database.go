@@ -43,15 +43,17 @@ type database interface {
 }
 
 type inMemoryStore struct {
-	m     sync.Map
-	dir   string
-	clock clock
+	m             sync.Map
+	dir           string
+	flushInterval time.Duration
+	clock         clock
 }
 
-func newLevelDBStore(dir string) (*inMemoryStore, error) {
+func newLevelDBStore(dir string, flushInterval time.Duration) (*inMemoryStore, error) {
 	s := &inMemoryStore{
-		dir:   dir,
-		clock: defaultClock{},
+		dir:           dir,
+		flushInterval: flushInterval,
+		clock:         defaultClock{},
 	}
 	if err := s.read(); err != nil {
 		log.Printf("Error reading database: %v", err)
@@ -107,8 +109,12 @@ func (s *inMemoryStore) get(key string) (DatabaseRecord, error) {
 }
 
 func (s *inMemoryStore) Serve(ctx context.Context) error {
-	t := time.NewTimer(0)
+	t := time.NewTimer(s.flushInterval)
 	defer t.Stop()
+
+	if s.flushInterval <= 0 {
+		t.Stop()
+	}
 
 loop:
 	for {
@@ -118,7 +124,7 @@ loop:
 				log.Println("Error writing database:", err)
 			}
 			s.calculateStatistics()
-			t.Reset(5 * time.Minute)
+			t.Reset(s.flushInterval)
 
 		case <-ctx.Done():
 			// We're done.

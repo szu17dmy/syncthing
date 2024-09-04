@@ -14,7 +14,7 @@ import (
 )
 
 func TestDatabaseGetSet(t *testing.T) {
-	db, err := newLevelDBStore(t.TempDir())
+	db, err := newLevelDBStore(t.TempDir(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
