@@ -527,8 +527,10 @@ func (t *retryAfterTracker) retryAfterS() int {
 			log.Printf("%s: increasing Retry-After to %d (%.0f/%.0f)", t.name, t.currentDelay, lastRate, t.desiredRate)
 		}
 
-		retryAfterLevel.WithLabelValues(t.name).Set(float64(t.currentDelay))
 		t.curCount = 0
+	}
+	if t.curCount == 0 {
+		retryAfterLevel.WithLabelValues(t.name).Set(float64(t.currentDelay))
 	}
 	t.curCount++
 	t.mut.Unlock()
