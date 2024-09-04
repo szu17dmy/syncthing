@@ -49,7 +49,7 @@ type inMemoryStore struct {
 	clock         clock
 }
 
-func newLevelDBStore(dir string, flushInterval time.Duration) *inMemoryStore {
+func newInMemoryStore(dir string, flushInterval time.Duration) *inMemoryStore {
 	s := &inMemoryStore{
 		dir:           dir,
 		flushInterval: flushInterval,

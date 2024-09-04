@@ -164,7 +164,7 @@ func main() {
 	})
 
 	// Start the database.
-	db := newLevelDBStore(dir, flushInterval)
+	db := newInMemoryStore(dir, flushInterval)
 	main.Add(db)
 
 	// Start any replication senders.
