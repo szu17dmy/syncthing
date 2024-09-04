@@ -215,9 +215,14 @@ func (s *inMemoryStore) write() (err error) {
 
 	var buf []byte
 	var rangeErr error
+	now := s.clock.Now().Unix()
 	s.m.Range(func(keyI, valueI any) bool {
 		key := keyI.(string)
 		value := valueI.(DatabaseRecord)
+		value.Addresses = expire(value.Addresses, now)
+		if len(value.Addresses) == 0 {
+			return true
+		}
 		rec := ReplicationRecord{
 			Key:       key,
 			Addresses: value.Addresses,
@@ -280,6 +285,9 @@ func (s *inMemoryStore) read() error {
 		rec := ReplicationRecord{}
 		if err := rec.Unmarshal(buf[:n]); err != nil {
 			return err
+		}
+		if len(rec.Addresses) == 0 {
+			continue
 		}
 		s.m.Store(rec.Key, DatabaseRecord{
 			Addresses: rec.Addresses,
