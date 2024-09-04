@@ -196,8 +196,7 @@ func (s *apiSrv) handleGET(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	key := deviceID.String()
-	rec, err := s.db.get(key)
+	rec, err := s.db.get(&deviceID)
 	if err != nil {
 		// some sort of internal error
 		lookupRequestsTotal.WithLabelValues("internal_error").Inc()
@@ -291,7 +290,6 @@ func (s *apiSrv) Stop() {
 }
 
 func (s *apiSrv) handleAnnounce(deviceID protocol.DeviceID, addresses []string) error {
-	key := deviceID.String()
 	now := time.Now()
 	expire := now.Add(addressExpiryTime).UnixNano()
 
@@ -307,9 +305,9 @@ func (s *apiSrv) handleAnnounce(deviceID protocol.DeviceID, addresses []string) 
 
 	seen := now.UnixNano()
 	if s.repl != nil {
-		s.repl.send(key, dbAddrs, seen)
+		s.repl.send(&deviceID, dbAddrs, seen)
 	}
-	return s.db.merge(key, dbAddrs, seen)
+	return s.db.merge(&deviceID, dbAddrs, seen)
 }
 
 func handlePing(w http.ResponseWriter, _ *http.Request) {

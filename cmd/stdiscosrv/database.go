@@ -23,6 +23,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/syncthing/syncthing/lib/protocol"
 	"github.com/syncthing/syncthing/lib/sliceutil"
 )
 
@@ -37,13 +42,13 @@ func (defaultClock) Now() time.Time {
 }
 
 type database interface {
-	put(key string, rec DatabaseRecord) error
-	merge(key string, addrs []DatabaseAddress, seen int64) error
-	get(key string) (DatabaseRecord, error)
+	put(key *protocol.DeviceID, rec DatabaseRecord) error
+	merge(key *protocol.DeviceID, addrs []DatabaseAddress, seen int64) error
+	get(key *protocol.DeviceID) (DatabaseRecord, error)
 }
 
 type inMemoryStore struct {
-	m             sync.Map
+	m             typedSyncMap[protocol.DeviceID, DatabaseRecord]
 	dir           string
 	flushInterval time.Duration
 	clock         clock
@@ -55,21 +60,35 @@ func newInMemoryStore(dir string, flushInterval time.Duration) *inMemoryStore {
 		flushInterval: flushInterval,
 		clock:         defaultClock{},
 	}
-	if err := s.read(); err != nil {
-		log.Printf("Error reading database: %v", err)
+	err := s.read()
+	if os.IsNotExist(err) {
+		// Try to read from AWS
+		fd, cerr := os.Create(path.Join(s.dir, "records.db"))
+		if cerr != nil {
+			log.Println("Error creating database file:", err)
+			return s
+		}
+		if err := s3Download(fd); err != nil {
+			log.Printf("Error reading database from S3: %v", err)
+		}
+		_ = fd.Close()
+		err = s.read()
+	}
+	if err != nil {
+		log.Println("Error reading database:", err)
 	}
 	return s
 }
 
-func (s *inMemoryStore) put(key string, rec DatabaseRecord) error {
+func (s *inMemoryStore) put(key *protocol.DeviceID, rec DatabaseRecord) error {
 	t0 := time.Now()
-	s.m.Store(key, rec)
+	s.m.Store(*key, rec)
 	databaseOperations.WithLabelValues(dbOpPut, dbResSuccess).Inc()
 	databaseOperationSeconds.WithLabelValues(dbOpPut).Observe(time.Since(t0).Seconds())
 	return nil
 }
 
-func (s *inMemoryStore) merge(key string, addrs []DatabaseAddress, seen int64) error {
+func (s *inMemoryStore) merge(key *protocol.DeviceID, addrs []DatabaseAddress, seen int64) error {
 	t0 := time.Now()
 
 	newRec := DatabaseRecord{
@@ -77,12 +96,9 @@ func (s *inMemoryStore) merge(key string, addrs []DatabaseAddress, seen int64) e
 		Seen:      seen,
 	}
 
-	var oldRec DatabaseRecord
-	if vi, ok := s.m.Load(key); ok {
-		oldRec = vi.(DatabaseRecord)
-	}
+	oldRec, _ := s.m.Load(*key)
 	newRec = merge(newRec, oldRec)
-	s.m.Store(key, newRec)
+	s.m.Store(*key, newRec)
 
 	databaseOperations.WithLabelValues(dbOpMerge, dbResSuccess).Inc()
 	databaseOperationSeconds.WithLabelValues(dbOpMerge).Observe(time.Since(t0).Seconds())
@@ -90,19 +106,18 @@ func (s *inMemoryStore) merge(key string, addrs []DatabaseAddress, seen int64) e
 	return nil
 }
 
-func (s *inMemoryStore) get(key string) (DatabaseRecord, error) {
+func (s *inMemoryStore) get(key *protocol.DeviceID) (DatabaseRecord, error) {
 	t0 := time.Now()
 	defer func() {
 		databaseOperationSeconds.WithLabelValues(dbOpGet).Observe(time.Since(t0).Seconds())
 	}()
 
-	vi, ok := s.m.Load(key)
+	rec, ok := s.m.Load(*key)
 	if !ok {
 		databaseOperations.WithLabelValues(dbOpGet, dbResNotFound).Inc()
 		return DatabaseRecord{}, nil
 	}
 
-	rec := vi.(DatabaseRecord)
 	rec.Addresses = expire(rec.Addresses, s.clock.Now().UnixNano())
 	databaseOperations.WithLabelValues(dbOpGet, dbResSuccess).Inc()
 	return rec, nil
@@ -142,9 +157,7 @@ func (s *inMemoryStore) calculateStatistics() {
 	cutoff1w := t0.Add(-7 * 24 * time.Hour).UnixNano()
 	current, currentIPv4, currentIPv6, last24h, last1w, errors := 0, 0, 0, 0, 0, 0
 
-	s.m.Range(func(keyI, valueI any) bool {
-		rec := valueI.(DatabaseRecord)
-
+	s.m.Range(func(key protocol.DeviceID, rec DatabaseRecord) bool {
 		// If there are addresses that have not expired it's a current
 		// record, otherwise account it based on when it was last seen
 		// (last 24 hours or last week) or finally as inactice.
@@ -183,7 +196,7 @@ func (s *inMemoryStore) calculateStatistics() {
 			last1w++
 		default:
 			// drop the record if it's older than a week
-			s.m.Delete(keyI)
+			s.m.Delete(key)
 		}
 		return true
 	})
@@ -217,15 +230,13 @@ func (s *inMemoryStore) write() (err error) {
 	var rangeErr error
 	now := s.clock.Now().UnixNano()
 	cutoff1w := s.clock.Now().Add(-7 * 24 * time.Hour).UnixNano()
-	s.m.Range(func(keyI, valueI any) bool {
-		key := keyI.(string)
-		value := valueI.(DatabaseRecord)
+	s.m.Range(func(key protocol.DeviceID, value DatabaseRecord) bool {
 		if value.Seen < cutoff1w {
 			// drop the record if it's older than a week
 			return true
 		}
 		rec := ReplicationRecord{
-			Key:       key,
+			Key:       key[:],
 			Addresses: expire(value.Addresses, now),
 			Seen:      value.Seen,
 		}
@@ -257,7 +268,24 @@ func (s *inMemoryStore) write() (err error) {
 	if err := fd.Close(); err != nil {
 		return err
 	}
-	return os.Rename(dbf+".tmp", dbf)
+	if err := os.Rename(dbf+".tmp", dbf); err != nil {
+		return err
+	}
+
+	if os.Getenv("PODINDEX") == "0" {
+		// Upload to S3
+		fd, err = os.Open(dbf)
+		if err != nil {
+			log.Printf("Error uploading database to S3: %v", err)
+			return nil
+		}
+		defer fd.Close()
+		if err := s3Upload(fd); err != nil {
+			log.Printf("Error uploading database to S3: %v", err)
+		}
+	}
+
+	return nil
 }
 
 func (s *inMemoryStore) read() error {
@@ -287,7 +315,16 @@ func (s *inMemoryStore) read() error {
 		if err := rec.Unmarshal(buf[:n]); err != nil {
 			return err
 		}
-		s.m.Store(rec.Key, DatabaseRecord{
+		key, err := protocol.DeviceIDFromBytes(rec.Key)
+		if err != nil {
+			key, err = protocol.DeviceIDFromString(string(rec.Key))
+		}
+		if err != nil {
+			log.Println("Bad device ID:", err)
+			continue
+		}
+
+		s.m.Store(key, DatabaseRecord{
 			Addresses: rec.Addresses,
 			Seen:      rec.Seen,
 		})
@@ -405,4 +442,64 @@ func (s databaseAddressOrder) Swap(a, b int) {
 
 func (s databaseAddressOrder) Len() int {
 	return len(s)
+}
+
+func s3Upload(r io.Reader) error {
+	sess, err := session.NewSession(&aws.Config{
+		Region:   aws.String("eu-amsterdam-1"),
+		Endpoint: aws.String("axfjqlqxnvyp.compat.objectstorage.eu-amsterdam-1.oraclecloud.com"),
+	})
+	if err != nil {
+		return err
+	}
+	uploader := s3manager.NewUploader(sess)
+	_, err = uploader.Upload(&s3manager.UploadInput{
+		Bucket: aws.String("syncthing-discovery"),
+		Key:    aws.String("discovery.db"),
+		Body:   r,
+	})
+	return err
+}
+
+func s3Download(w io.WriterAt) error {
+	sess, err := session.NewSession(&aws.Config{
+		Region:   aws.String("eu-amsterdam-1"),
+		Endpoint: aws.String("axfjqlqxnvyp.compat.objectstorage.eu-amsterdam-1.oraclecloud.com"),
+	})
+	if err != nil {
+		return err
+	}
+	downloader := s3manager.NewDownloader(sess)
+	_, err = downloader.Download(w, &s3.GetObjectInput{
+		Bucket: aws.String("syncthing-discovery"),
+		Key:    aws.String("discovery.db"),
+	})
+	return err
+}
+
+type typedSyncMap[K comparable, V any] struct {
+	m sync.Map
+}
+
+func (m *typedSyncMap[K, V]) Load(key K) (value V, ok bool) {
+	v, ok := m.m.Load(key)
+	if !ok {
+		var v V
+		return v, false
+	}
+	return v.(V), true
+}
+
+func (m *typedSyncMap[K, V]) Store(key K, value V) {
+	m.m.Store(key, value)
+}
+
+func (m *typedSyncMap[K, V]) Range(f func(key K, value V) bool) {
+	m.m.Range(func(key, value any) bool {
+		return f(key.(K), value.(V))
+	})
+}
+
+func (m *typedSyncMap[K, V]) Delete(key K) {
+	m.m.Delete(key)
 }

@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/syncthing/syncthing/lib/protocol"
 )
 
 func TestDatabaseGetSet(t *testing.T) {
@@ -21,7 +23,7 @@ func TestDatabaseGetSet(t *testing.T) {
 
 	// Check missing record
 
-	rec, err := db.get("abcd")
+	rec, err := db.get(&protocol.EmptyDeviceID)
 	if err != nil {
 		t.Error("not found should not be an error")
 	}
@@ -40,13 +42,13 @@ func TestDatabaseGetSet(t *testing.T) {
 	rec.Addresses = []DatabaseAddress{
 		{Address: "tcp://1.2.3.4:5", Expires: tc.Now().Add(time.Minute).UnixNano()},
 	}
-	if err := db.put("abcd", rec); err != nil {
+	if err := db.put(&protocol.EmptyDeviceID, rec); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify it
 
-	rec, err = db.get("abcd")
+	rec, err = db.get(&protocol.EmptyDeviceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,13 +68,13 @@ func TestDatabaseGetSet(t *testing.T) {
 	addrs := []DatabaseAddress{
 		{Address: "tcp://6.7.8.9:0", Expires: tc.Now().Add(time.Minute).UnixNano()},
 	}
-	if err := db.merge("abcd", addrs, tc.Now().UnixNano()); err != nil {
+	if err := db.merge(&protocol.EmptyDeviceID, addrs, tc.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify it
 
-	rec, err = db.get("abcd")
+	rec, err = db.get(&protocol.EmptyDeviceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +97,7 @@ func TestDatabaseGetSet(t *testing.T) {
 
 	// Verify it
 
-	rec, err = db.get("abcd")
+	rec, err = db.get(&protocol.EmptyDeviceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,13 +115,13 @@ func TestDatabaseGetSet(t *testing.T) {
 	addrs = []DatabaseAddress{
 		{Address: "tcp://6.7.8.9:0", Expires: tc.Now().Add(time.Minute).UnixNano()},
 	}
-	if err := db.merge("efgh", addrs, tc.Now().UnixNano()); err != nil {
+	if err := db.merge(&protocol.GlobalDeviceID, addrs, tc.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify it
 
-	rec, err = db.get("efgh")
+	rec, err = db.get(&protocol.GlobalDeviceID)
 	if err != nil {
 		t.Fatal(err)
 	}

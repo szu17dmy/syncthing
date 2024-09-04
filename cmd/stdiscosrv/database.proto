@@ -21,7 +21,7 @@ message DatabaseRecord {
 }
 
 message ReplicationRecord {
-    string                   key       = 1;
+    bytes                    key       = 1; // raw 32 byte device ID
     repeated DatabaseAddress addresses = 2 [(gogoproto.nullable) = false];
     int64                    seen      = 3; // Unix nanos, last device announce
 }

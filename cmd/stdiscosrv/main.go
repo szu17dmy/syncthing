@@ -189,14 +189,6 @@ func main() {
 		main.Add(kr)
 	}
 
-	go func() {
-		for range time.NewTicker(time.Second).C {
-			for _, r := range repl {
-				r.send("<heartbeat>", nil, time.Now().UnixNano())
-			}
-		}
-	}()
-
 	// Start the main API server.
 	qs := newAPISrv(listen, cert, db, repl, useHTTP)
 	main.Add(qs)
