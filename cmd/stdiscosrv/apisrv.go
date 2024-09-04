@@ -506,12 +506,12 @@ func (t *retryAfterTracker) retryAfterS() int {
 		t.lastCount = t.curCount
 
 		switch {
-		case t.lastCount < t.desiredRate/3*2:
+		case t.desiredRate > notFoundRetryUnknownMinSeconds && t.lastCount < t.desiredRate/3*2:
 			t.currentDelay = max(t.currentDelay/2, notFoundRetryUnknownMinSeconds)
-			log.Printf("retryAfterTracker: decreasing delay to %d (%d/%d)", t.currentDelay, t.lastCount, t.desiredRate)
-		case t.lastCount > t.desiredRate/2*3:
+			log.Printf("retryAfterTracker: decreasing Retry-After to %d (%d/%d)", t.currentDelay, t.lastCount, t.desiredRate)
+		case t.desiredRate < notFoundRetryUnknownMaxSeconds && t.lastCount > t.desiredRate/2*3:
 			t.currentDelay = min(t.currentDelay*3/2, notFoundRetryUnknownMaxSeconds)
-			log.Printf("retryAfterTracker: increasing delay to %d (%d/%d)", t.currentDelay, t.lastCount, t.desiredRate)
+			log.Printf("retryAfterTracker: increasing Retry-After to %d (%d/%d)", t.currentDelay, t.lastCount, t.desiredRate)
 		}
 
 		t.curCount = 0
