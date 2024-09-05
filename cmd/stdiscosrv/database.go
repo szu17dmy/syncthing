@@ -447,7 +447,7 @@ func (s databaseAddressOrder) Len() int {
 func s3Upload(r io.Reader) error {
 	sess, err := session.NewSession(&aws.Config{
 		Region:   aws.String("fr-par"),
-		Endpoint: aws.String("syncthing-discovery.s3.fr-par.scw.cloud"),
+		Endpoint: aws.String("s3.fr-par.scw.cloud"),
 	})
 	if err != nil {
 		return err
@@ -464,7 +464,7 @@ func s3Upload(r io.Reader) error {
 func s3Download(w io.WriterAt) error {
 	sess, err := session.NewSession(&aws.Config{
 		Region:   aws.String("fr-par"),
-		Endpoint: aws.String("syncthing-discovery.s3.fr-par.scw.cloud"),
+		Endpoint: aws.String("s3.fr-par.scw.cloud"),
 	})
 	if err != nil {
 		return err

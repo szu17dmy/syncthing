@@ -164,7 +164,7 @@ func (s *amqpReceiver) Serve(ctx context.Context) error {
 				replicationRecvsTotal.WithLabelValues("error").Inc()
 				return fmt.Errorf("replication unmarshal: %w", err)
 			}
-			if bytes.Equal(rec.Key, []byte("<hearbeat>")) {
+			if bytes.Equal(rec.Key, []byte("<heartbeat>")) {
 				continue
 			}
 			id, err := protocol.DeviceIDFromBytes(rec.Key)
