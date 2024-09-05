@@ -75,7 +75,7 @@ func main() {
 
 	flag.StringVar(&certFile, "cert", "./cert.pem", "Certificate file")
 	flag.StringVar(&keyFile, "key", "./key.pem", "Key file")
-	flag.StringVar(&dir, "db-dir", "./discovery.db", "Database directory")
+	flag.StringVar(&dir, "db-dir", ".", "Database directory")
 	flag.BoolVar(&debug, "debug", false, "Print debug output")
 	flag.BoolVar(&useHTTP, "http", false, "Listen on HTTP (behind an HTTPS proxy)")
 	flag.StringVar(&listen, "listen", ":8443", "Listen address")
