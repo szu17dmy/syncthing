@@ -209,10 +209,11 @@ func (s *apiSrv) handleGET(w http.ResponseWriter, req *http.Request) {
 		var afterS int
 		if rec.Seen == 0 {
 			afterS = s.notSeenTracker.retryAfterS()
+			lookupRequestsTotal.WithLabelValues("not_found_ever").Inc()
 		} else {
 			afterS = s.seenTracker.retryAfterS()
+			lookupRequestsTotal.WithLabelValues("not_found_recent").Inc()
 		}
-		lookupRequestsTotal.WithLabelValues("not_found").Inc()
 		w.Header().Set("Retry-After", strconv.Itoa(afterS))
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
