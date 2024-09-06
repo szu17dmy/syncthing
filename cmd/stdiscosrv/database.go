@@ -20,13 +20,13 @@ import (
 	"os"
 	"path"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/puzpuzpuz/xsync/v3"
 	"github.com/syncthing/syncthing/lib/protocol"
 	"github.com/syncthing/syncthing/lib/sliceutil"
 )
@@ -48,7 +48,7 @@ type database interface {
 }
 
 type inMemoryStore struct {
-	m             typedSyncMap[protocol.DeviceID, DatabaseRecord]
+	m             xsync.MapOf[protocol.DeviceID, DatabaseRecord]
 	dir           string
 	flushInterval time.Duration
 	clock         clock
@@ -475,31 +475,4 @@ func s3Download(w io.WriterAt) error {
 		Key:    aws.String("discovery.db"),
 	})
 	return err
-}
-
-type typedSyncMap[K comparable, V any] struct {
-	m sync.Map
-}
-
-func (m *typedSyncMap[K, V]) Load(key K) (value V, ok bool) {
-	v, ok := m.m.Load(key)
-	if !ok {
-		var v V
-		return v, false
-	}
-	return v.(V), true
-}
-
-func (m *typedSyncMap[K, V]) Store(key K, value V) {
-	m.m.Store(key, value)
-}
-
-func (m *typedSyncMap[K, V]) Range(f func(key K, value V) bool) {
-	m.m.Range(func(key, value any) bool {
-		return f(key.(K), value.(V))
-	})
-}
-
-func (m *typedSyncMap[K, V]) Delete(key K) {
-	m.m.Delete(key)
 }
