@@ -48,7 +48,7 @@ type database interface {
 }
 
 type inMemoryStore struct {
-	m             xsync.MapOf[protocol.DeviceID, DatabaseRecord]
+	m             *xsync.MapOf[protocol.DeviceID, DatabaseRecord]
 	dir           string
 	flushInterval time.Duration
 	clock         clock
@@ -56,6 +56,7 @@ type inMemoryStore struct {
 
 func newInMemoryStore(dir string, flushInterval time.Duration) *inMemoryStore {
 	s := &inMemoryStore{
+		m:             xsync.NewMapOf[protocol.DeviceID, DatabaseRecord](),
 		dir:           dir,
 		flushInterval: flushInterval,
 		clock:         defaultClock{},
