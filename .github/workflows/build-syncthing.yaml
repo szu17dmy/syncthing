@@ -733,7 +733,8 @@ jobs:
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/release' || startsWith(github.ref, 'refs/heads/release-'))
     environment: signing
     needs:
-      - basics
+      # - basics
+      - package-debian
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -749,6 +750,7 @@ jobs:
       - name: Set version
         run: |
           version=$(go run build.go version)
+          echo "Version: $version"
           echo "VERSION=$version" >> $GITHUB_ENV
 
       - name: Prepare packages
@@ -759,6 +761,7 @@ jobs:
           elif [[ $version == *-* ]] ; then
             kind=nightly
           fi
+          echo "Kind: $kind"
           mkdir -p packages/syncthing/$kind
           mv packages/*.deb packages/syncthing/$kind
 
@@ -773,7 +776,7 @@ jobs:
           RCLONE_CONFIG_OBJSTORE_REGION: ${{ secrets.S3_REGION }}
           RCLONE_CONFIG_OBJSTORE_ACL: public-read
         with:
-          args: sync objstore:${{ secrets.S3_BUCKET }}/syncthing-apt/dists dists
+          args: sync objstore:syncthing-apt/dists dists
 
       - name: Prepare signing key
         run: |
