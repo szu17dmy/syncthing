@@ -756,9 +756,9 @@ jobs:
       - name: Prepare packages
         run: |
           kind=stable
-          if [[ $version == *-rc.* ]] ; then
+          if [[ $VERSION == *-rc.[0-9] ]] ; then
             kind=candidate
-          elif [[ $version == *-* ]] ; then
+          elif [[ $VERSION == *-* ]] ; then
             kind=nightly
           fi
           echo "Kind: $kind"
@@ -785,7 +785,7 @@ jobs:
           APT_GPG_KEYRING_BASE64: ${{ secrets.APT_GPG_KEYRING_BASE64 }}
 
       - name: Create APT archive
-        uses: docker://ghcr.io/kastelo/ezapt:latest
+        uses: docker://ghcr.io/kastelo/ezapt:edge
         with:
           args:
             --keyring keyring.pgp
