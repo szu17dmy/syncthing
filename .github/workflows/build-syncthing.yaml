@@ -803,7 +803,7 @@ jobs:
           RCLONE_CONFIG_OBJSTORE_REGION: ${{ secrets.S3_REGION }}
           RCLONE_CONFIG_OBJSTORE_ACL: public-read
         with:
-          args: sync dists objstore:${{ secrets.S3_BUCKET }}/syncthing-apt/dists
+          args: sync dists -v objstore:syncthing-apt/dists
 
   #
   # Build and push to Docker Hub
