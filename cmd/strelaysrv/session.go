@@ -27,7 +27,7 @@ var (
 	bytesProxied    int64
 )
 
-func newSession(serverid, clientid syncthingprotocol.DeviceID, sessionRateLimit, globalRateLimit *rate.Limiter) *session {
+func newSession(serverid, clientid syncthingprotocol.DeviceID, sessionLimitBps int, globalRateLimit *rate.Limiter) *session {
 	serverkey := make([]byte, 32)
 	_, err := rand.Read(serverkey)
 	if err != nil {
@@ -40,12 +40,17 @@ func newSession(serverid, clientid syncthingprotocol.DeviceID, sessionRateLimit,
 		return nil
 	}
 
+	var sessionLimiter *rate.Limiter
+	if sessionLimitBps > 0 {
+		sessionLimiter = rate.NewLimiter(rate.Limit(sessionLimitBps), 2*sessionLimitBps)
+	}
 	ses := &session{
 		serverkey: serverkey,
 		serverid:  serverid,
 		clientkey: clientkey,
 		clientid:  clientid,
-		rateLimit: makeRateLimitFunc(sessionRateLimit, globalRateLimit),
+		rateLimit: makeRateLimitFunc(sessionLimiter, globalRateLimit),
+		limiter:   sessionLimiter,
 		connsChan: make(chan net.Conn),
 		conns:     make([]net.Conn, 0, 2),
 	}
@@ -110,6 +115,7 @@ type session struct {
 	clientid  syncthingprotocol.DeviceID
 
 	rateLimit func(bytes int)
+	limiter   *rate.Limiter
 
 	connsChan chan net.Conn
 	conns     []net.Conn
